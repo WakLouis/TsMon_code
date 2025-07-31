@@ -86,7 +86,7 @@ class QueueRow:
         self.d = d
         self.bucket = [0 for _ in range(d)]
         self.flowKey = 0
-        self.last_time = 0 # 先不管那么多内存方面的问题了
+        self.last_time = 0  # 先不管那么多内存方面的问题了
 
     def insert_data(self, value, pos, key, full_time):
         self.bucket[pos] = value
@@ -180,8 +180,6 @@ class TsMon:
         self.global_time_stamp = global_time
         value, insert_time_stamp = self.sketch.process(key, global_time, p_bytes, self.window_size)
         if value is not None:
-            if key == 14909:
-                print('---')
 
             # self.cms_value[key].append(value)
 
@@ -201,32 +199,23 @@ class TsMon:
             '''
             queue_key = self.queue.query_key(key)
             queue_time = self.queue.query_last_time(key)
-            replay_time_stamp = (queue_time // (self.window_size * QUEUE_COLUMNS) + 1) * (self.window_size * QUEUE_COLUMNS) # 针对某个流键, 当前队列的截止时间戳
+            replay_time_stamp = (queue_time // (self.window_size * QUEUE_COLUMNS) + 1) * (self.window_size * QUEUE_COLUMNS)  # 针对某个流键, 当前队列的截止时间戳
             if queue_key != key:
-                if key == 14909:
-                    print('A')
                 # 如果队列流键和当前数据包流键不相同, 说明当前队列的时间戳是无效的, 直接弹出当前队列数据
-                # 问题是,A在帮B插入数据的时候, 需要判断此时B是否是超过时间窗口?
                 for i, x in enumerate(list(self.queue.query(queue_key))):
                     if x == 0: continue
-                    self.replay[queue_key].append(((replay_time_stamp - (QUEUE_COLUMNS - i - 1) * self.window_size) // self.window_size * self.window_size, x))
+                    self.replay[queue_key].append(((replay_time_stamp - (QUEUE_COLUMNS - i) * self.window_size) // self.window_size * self.window_size, x))
                 self.queue.reinitialize_one_line(queue_key)
 
             else:
                 # 相同流键, 因此按正常流程进行窗口判断
                 if global_time // (self.window_size * QUEUE_COLUMNS) - insert_time_stamp // (self.window_size * QUEUE_COLUMNS) > 0:
-                    if key == 14909:
-                        print('B')
                     for i, x in enumerate(list(self.queue.query(key))):
                         if x == 0: continue
-                        self.replay[key].append(((replay_time_stamp - (QUEUE_COLUMNS - i - 1) * self.window_size) // self.window_size * self.window_size, x))
+                        self.replay[key].append(((replay_time_stamp - (QUEUE_COLUMNS - i) * self.window_size) // self.window_size * self.window_size, x))
                     self.queue.reinitialize_one_line(key)
-                else:
-                    if key == 14909:
-                        print('C')
 
-            self.queue.insert(key, value, global_time_to_short(insert_time_stamp, self.window_size), self.global_time_stamp)  # test self.global_time_stamp
-
+            self.queue.insert(key, value, global_time_to_short(insert_time_stamp, self.window_size), self.global_time_stamp)  # 如果global_time_to_short里面是global_time 而不是 insert_time_stamp, 问题可以解决,但是时间戳有点错位
 
             '''
             Anomaly detection - t_sigma sliding window  ***DEPRECATED***
@@ -268,7 +257,6 @@ class TsMon:
             for num in queue.bucket:
                 if num == 0: continue
                 self.replay[queue.flowKey].append((self.global_time_stamp, num))
-
 
 # def t_sigma(values):
 #     values = [x for x in values if x != 0]

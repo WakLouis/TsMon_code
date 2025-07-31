@@ -6,3 +6,7 @@ CPU/CPU.vcxproj.filters
 CPU/CPU.vcxproj
 CPU/CPU.sln
 /.vs
+*.csv
+*.npy
+*.pdf
+*.jpg
