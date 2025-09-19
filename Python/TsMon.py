@@ -39,11 +39,22 @@ class SketchRow:
         return return_flag, return_time
 
     def update_counter(self, key, p_bytes):
+        '''
+        :param key:
+        :param p_bytes:
+        :return: 还没有累加的历史值
+        '''
         index = self.hash_func(key)
         return_value = self.bucket[index].counter
         # here we count the number of packets
         self.bucket[index].counter += p_bytes
         return return_value
+
+    def query_counter(self, key):
+        index = self.hash_func(key)
+        return_value = self.bucket[index].counter
+        return return_value
+
 
     def deletion_counter(self, key, value):
         index = self.hash_func(key)
@@ -165,6 +176,7 @@ class TsMon:
         '''
         self.replay = defaultdict(list)
 
+
         '''
         DEPRECATED
         '''
@@ -176,7 +188,21 @@ class TsMon:
         #
         # self.cms_value = defaultdict(list)
 
-    def process(self, key, p_bytes, global_time, target_key):
+        '''
+        TsSketch_test 保存的流量曲线
+        '''
+        self.traffic = defaultdict(list)
+    def TsSketch_test(self, key, p_bytes, global_time):
+        value, _ = self.sketch.process(key, global_time, p_bytes, self.window_size)
+        if value is not None and value != 0:
+            self.traffic[key].append((global_time, value))
+
+
+
+
+
+
+    def process(self, key, p_bytes, global_time):
         self.global_time_stamp = global_time
         value, insert_time_stamp = self.sketch.process(key, global_time, p_bytes, self.window_size)
         if value is not None:
@@ -215,7 +241,7 @@ class TsMon:
                         self.replay[key].append(((replay_time_stamp - (QUEUE_COLUMNS - i) * self.window_size) // self.window_size * self.window_size, x))
                     self.queue.reinitialize_one_line(key)
 
-            self.queue.insert(key, value, global_time_to_short(insert_time_stamp, self.window_size), self.global_time_stamp)  # 如果global_time_to_short里面是global_time 而不是 insert_time_stamp, 问题可以解决,但是时间戳有点错位
+            self.queue.insert(key, value, global_time_to_short(global_time, self.window_size), self.global_time_stamp)  # 如果global_time_to_short里面是global_time 而不是 insert_time_stamp, 问题可以解决,但是时间戳有点错位
 
             '''
             Anomaly detection - t_sigma sliding window  ***DEPRECATED***
@@ -252,11 +278,27 @@ class TsMon:
     def popout(self, key):
         return self.queue.query(key)
 
-    def popout_residual_data(self):
+    def popout_residual_data(self, flowNum):
         for queue in self.queue.row:
             for num in queue.bucket:
                 if num == 0: continue
                 self.replay[queue.flowKey].append((self.global_time_stamp, num))
+
+        '''
+        本来想把Sketch中剩余数据全部吐出来, 发现误差特别大, 还是算了
+        '''
+
+        # for id in range(1, flowNum):
+        #     value = 0x7fffffff
+        #     for i in range(SKETCH_ROWS):
+        #         value = min(value, self.sketch.row[i].query_counter(id))
+        #
+        #     queue_time = self.queue.query_last_time(id)
+        #     if id == 14909:
+        #         print(queue_time)
+        #     replay_time_stamp = (queue_time // (self.window_size * QUEUE_COLUMNS) + 1) * (self.window_size * QUEUE_COLUMNS)
+        #     self.replay[id].append((replay_time_stamp, value))
+
 
 # def t_sigma(values):
 #     values = [x for x in values if x != 0]
