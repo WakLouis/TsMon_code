@@ -192,6 +192,7 @@ class TsMon:
         TsSketch_test 保存的流量曲线
         '''
         self.traffic = defaultdict(list)
+
     def TsSketch_test(self, key, p_bytes, global_time):
         value, _ = self.sketch.process(key, global_time, p_bytes, self.window_size)
         if value is not None and value != 0:
