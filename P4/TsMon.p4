@@ -418,19 +418,19 @@ control TSSKETCH(
 
     action getHashing0(){
         //for test
-        // tsdata.index0 = 0;
-        tsdata.index0 = hash0.get({hdr.ipv4.src_addr, hdr.ipv4.dst_addr, hdr.tcp.src_port, hdr.tcp.dst_port, hdr.ipv4.protocol});
+        tsdata.index0 = 0;
+        // tsdata.index0 = hash0.get({hdr.ipv4.src_addr, hdr.ipv4.dst_addr, hdr.tcp.src_port, hdr.tcp.dst_port, hdr.ipv4.protocol});
     }
 
     action getHashing1(){
         //for test
-        // tsdata.index1 = 0;
-        tsdata.index1 = hash1.get({hdr.ipv4.src_addr, hdr.ipv4.dst_addr});
+        tsdata.index1 = 0;
+        // tsdata.index1 = hash1.get({hdr.ipv4.src_addr, hdr.ipv4.dst_addr});
     }
 
     action cut_globaltstamp_to_short(){
         // tsdata.short_timeStamp = (bit<32>)ig_prsr_md.global_tstamp[22:20]; // ~1ms 8ms total
-        tsdata.short_timeStamp = (bit<32>)ig_prsr_md.global_tstamp[25:23]; // ~10ms 80ms total
+        tsdata.short_timeStamp = (bit<32>)ig_prsr_md.global_tstamp[32:30]; // ~1s 8s total
     }
 
 
@@ -1121,6 +1121,13 @@ control TSSKETCH(
 
 
     
+    Register<bit<32>, bit<1>>(1) temp_2;
+    RegisterAction<bit<32>, bit<1>, bit<32>> (temp_2) test_2={
+        void apply(inout bit<32> value, out bit<32> result) {
+            value = value + 1;
+            result = value;
+        }
+    };
 
 
     
@@ -1186,13 +1193,15 @@ control TSSKETCH(
             }
             else{
                 tsdata.internal_hdr.setInvalid();
-                // ig_tm_md.bypass_egress = 1w1;
+                tsdata.bri.setInvalid();
+                ig_tm_md.bypass_egress = 1w1;
             }
             
 
 
         }
         else{
+            test_2.execute(0);
             // only way to go to egress
             tsdata.bri.setValid();
             sketch0_del_action(tsdata.resub.index0);
@@ -1215,6 +1224,7 @@ control TSSKETCH(
             query_max_value_action();
             query_min_value_action();
 
+            tsdata.internal_hdr.setValid(); // 这里必须setValid, 原因是下面只是将 header_type setVliad, 然而这个 internal_hdr 结构体没有.
             tsdata.internal_hdr.header_type = internal_header_t.BRIDGE_HDR;
         }
 
@@ -1239,17 +1249,19 @@ control SwitchIngress(
     Register<bit<32>, bit<1>>(1) temp;
     RegisterAction<bit<32>, bit<1>, bit<32>> (temp) update={
         void apply(inout bit<32> value, out bit<32> result) {
-            value = (bit<32>)ig_prsr_md.global_tstamp;
+            value = (bit<32>)value + 1;
             result = value;
         }
     };
-
-    action update_action(){
+    action test_1(){
         update.execute(0);
     }
 
     action dmac_action(bit<9> port){
         ig_tm_md.ucast_egress_port = port;
+    }
+    action d_action(){
+        ig_tm_md.ucast_egress_port = 184;
     }
 
     table dmac{
@@ -1258,8 +1270,10 @@ control SwitchIngress(
         }
         actions={
             dmac_action;
+            d_action;
         }
         const size = 4;
+        default_action = d_action;
         const entries={
             176 : dmac_action(184);
             184 : dmac_action(176);
@@ -1269,28 +1283,27 @@ control SwitchIngress(
     TSSKETCH() tsSketch;
 
     apply{
-        // ig_md.internal_hdr.setInvalid(); 
         dmac.apply();
-        // ig_tm_md.bypass_egress = 1w1;
+        test_1();
 
-        
-        if(ig_intr_md.ingress_port == 176){
-            update_action();
-            tsSketch.apply(ig_md, hdr, ig_intr_md, ig_prsr_md, ig_dprsr_md, ig_tm_md);
-            
+        if(ig_intr_md.ingress_port != 184){ 
+            // 只处理TCP/UDP包
+            if(hdr.ipv4.isValid() && (hdr.tcp.isValid() || hdr.udp.isValid())){
+                
+                tsSketch.apply(ig_md, hdr, ig_intr_md, ig_prsr_md, ig_dprsr_md, ig_tm_md);
+            }
+            else{
+                // ARP、ICMP等其他协议直接转发
+                ig_md.internal_hdr.setInvalid();
+                ig_md.bri.setInvalid();
+                ig_tm_md.bypass_egress = 1w1;
+            }
         }
         else{
             ig_md.internal_hdr.setInvalid();
+            ig_md.bri.setInvalid();
             ig_tm_md.bypass_egress = 1w1;
         }
-
-        
-        
-
-        
-
-        
-
     }
 }
 
@@ -1299,6 +1312,43 @@ control SwitchIngress(
 // --------------------------------------------------------------
 
 
+// parser SwitchIngressParser(
+//         packet_in pkt,
+//         out header_t hdr,
+//         out metadata_t ig_md,
+//         out ingress_intrinsic_metadata_t ig_intr_md) {
+
+//     state start {
+//         ig_md.internal_hdr.setValid();
+//         ig_md.internal_hdr.header_type = internal_header_t.NONE;
+//         ig_md.bri.setInvalid();
+        
+//         pkt.extract(ig_intr_md);
+//         transition select(ig_intr_md.resubmit_flag) {
+//             0 : parse_ethernet;
+//             1 : parse_resubmit;
+//             default : accept;
+//         }
+//     }
+
+//     state parse_resubmit{
+//         pkt.extract(ig_md.resub);
+//         transition parse_ethernet_end;
+//     }
+
+//     state parse_ethernet {
+//         pkt.advance(PORT_METADATA_SIZE);
+//         pkt.extract(hdr.ethernet);
+//         transition accept;
+//     }
+
+//     state parse_ethernet_end{
+//         pkt.extract(hdr.ethernet);
+//         transition accept;
+//     }
+
+// }
+
 parser SwitchIngressParser(
         packet_in pkt,
         out header_t hdr,
@@ -1306,30 +1356,59 @@ parser SwitchIngressParser(
         out ingress_intrinsic_metadata_t ig_intr_md) {
 
     state start {
-        ig_md.internal_hdr.setValid();
-        ig_md.internal_hdr.header_type = internal_header_t.NONE;
-        ig_md.bri.setInvalid();
+        // ig_md.internal_hdr.setValid();
+        // ig_md.internal_hdr.header_type = internal_header_t.NONE;
+        // ig_md.bri.setInvalid();
+        
         pkt.extract(ig_intr_md);
         transition select(ig_intr_md.resubmit_flag) {
-            0 : parse_ethernet;
+            0 : skip_port_metadata;
             1 : parse_resubmit;
             default : accept;
         }
     }
 
     state parse_resubmit{
-        pkt.extract(ig_md.resub);
-        transition parse_ethernet_end;
+        ig_md.resub = pkt.lookahead<resub_t>();
+        pkt.advance(PORT_METADATA_SIZE);
+        transition parse_ethernet;
+    }
+
+    state skip_port_metadata {
+        pkt.advance(PORT_METADATA_SIZE);
+        transition parse_ethernet;
     }
 
     state parse_ethernet {
-        pkt.advance(PORT_METADATA_SIZE);
         pkt.extract(hdr.ethernet);
+        transition select(hdr.ethernet.ether_type) {
+            0x0800: parse_ipv4;   // IPv4
+            0x0806: parse_arp;    // ARP
+            default: accept;
+        }
+    }
+
+    state parse_arp {
+        pkt.extract(hdr.arp);  // 需要定义ARP头
         transition accept;
     }
 
-    state parse_ethernet_end{
-        pkt.extract(hdr.ethernet);
+    state parse_ipv4 {
+        pkt.extract(hdr.ipv4);
+        transition select(hdr.ipv4.protocol) {
+            6: parse_tcp;   // TCP
+            17: parse_udp;  // UDP
+            default: accept;
+        }
+    }
+
+    state parse_tcp {
+        pkt.extract(hdr.tcp);
+        transition accept;
+    }
+
+    state parse_udp {
+        pkt.extract(hdr.udp);
         transition accept;
     }
 
@@ -1350,17 +1429,17 @@ control SwitchIngressDeparser(
 
     apply {
         
-        // IT DOSEN'T WORK 
-        // mirror and resubmit may can't execute at same time.
-        // if(ig_dprsr_md.mirror_type == MIRROR_TYPE){
-        //     mirror.emit<mirror_h>(ig_md.ing_mir_ses, ig_md.mir);
-        // }
         if(ig_dprsr_md.resubmit_type == RESUBMIT_TYPE){
             resubmit.emit(ig_md.resub);
         }
         pkt.emit(ig_md.internal_hdr);
         pkt.emit(ig_md.bri);
-        pkt.emit(hdr);
+
+        pkt.emit(hdr.ethernet);
+        pkt.emit(hdr.arp); 
+        pkt.emit(hdr.ipv4);
+        pkt.emit(hdr.tcp);
+        pkt.emit(hdr.udp);
     }
 }
 
@@ -1368,6 +1447,40 @@ control SwitchIngressDeparser(
 // --------------------------------------------------------------
 //     Egress Parser
 // --------------------------------------------------------------
+
+// parser SwitchEgressParser(
+//         packet_in pkt,
+//         out header_t hdr,
+//         out metadata_t eg_md,
+//         out egress_intrinsic_metadata_t eg_intr_md){
+    
+//     state start{
+//         pkt.extract(eg_intr_md);
+//         transition parse_internal_hdr;
+//     }
+
+//     state parse_internal_hdr{
+//         pkt.extract(eg_md.internal_hdr);
+//         eg_md.bri.setInvalid();
+//         transition select(eg_md.internal_hdr.header_type) {
+//             internal_header_t.NONE: parse_ethernet;
+//             internal_header_t.BRIDGE_HDR: parse_bridge_hdr;
+//             default: parse_ethernet;
+//         }
+//     }
+
+//     state parse_bridge_hdr{
+//         pkt.extract(eg_md.bri);
+//         transition parse_ethernet;
+//     }
+
+//     state parse_ethernet{
+//         pkt.extract(hdr.ethernet);
+//         transition accept;
+//     }
+
+    
+// }
 
 parser SwitchEgressParser(
         packet_in pkt,
@@ -1382,7 +1495,7 @@ parser SwitchEgressParser(
 
     state parse_internal_hdr{
         pkt.extract(eg_md.internal_hdr);
-        eg_md.bri.setInvalid();
+        // eg_md.bri.setInvalid();
         transition select(eg_md.internal_hdr.header_type) {
             internal_header_t.NONE: parse_ethernet;
             internal_header_t.BRIDGE_HDR: parse_bridge_hdr;
@@ -1397,10 +1510,36 @@ parser SwitchEgressParser(
 
     state parse_ethernet{
         pkt.extract(hdr.ethernet);
+        transition select(hdr.ethernet.ether_type) {
+            0x0800: parse_ipv4;   // IPv4
+            0x0806: parse_arp;    // ARP
+            default: accept;
+        }
+    }
+
+    state parse_arp {
+        pkt.extract(hdr.arp);
         transition accept;
     }
 
-    
+    state parse_ipv4 {
+        pkt.extract(hdr.ipv4);
+        transition select(hdr.ipv4.protocol) {
+            6: parse_tcp;   // TCP
+            17: parse_udp;  // UDP
+            default: accept;
+        }
+    }
+
+    state parse_tcp {
+        pkt.extract(hdr.tcp);
+        transition accept;
+    }
+
+    state parse_udp {
+        pkt.extract(hdr.udp);
+        transition accept;
+    }
 }
 
 // --------------------------------------------------------------
@@ -1415,7 +1554,6 @@ control SwitchEgress(
         inout egress_intrinsic_metadata_for_deparser_t    eg_dprsr_md,
         inout egress_intrinsic_metadata_for_output_port_t eg_oport_md){
 
-    MathUnit<bucket_t>(MathOp_t.SQRT, 1, 2) sqrt;
 
     // FOR EGRESS 
 
@@ -1461,7 +1599,7 @@ control SwitchEgress(
     bucket_t feature7;
     bucket_t feature8;
 
-    bucket_t result;
+    bucket_t detection_result;
 
     // ---------------------------------------------------------
     // Registers
@@ -1470,42 +1608,42 @@ control SwitchEgress(
     Register<bit<32>, bit<1>>(1) eg_temp_1;
     RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_1) egress_test_1_ra={
         void apply(inout bit<32> value, out bit<32> result) {
-            value = (bit<32>)sum;
+            value = (bit<32>) sum;
             result = value;
         }
     };
 
-    // Register<bit<32>, bit<1>>(1) eg_temp_2;
-    // RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_2) egress_test_2_ra={
-    //     void apply(inout bit<32> value, out bit<32> result) {
-    //         value = (bit<32>)upper_limit;
-    //         result = value;
-    //     }
-    // };
+    Register<bit<32>, bit<1>>(1) eg_temp_2;
+    RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_2) egress_test_2_ra={
+        void apply(inout bit<32> value, out bit<32> result) {
+            value = (bit<32>) eg_md.bri.max_value;
+            result = value;
+        }
+    };
 
-    // Register<bit<32>, bit<1>>(1) eg_temp_3;
-    // RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_3) egress_test_3_ra={
-    //     void apply(inout bit<32> value, out bit<32> result) {
-    //         value = (bit<32>)eg_md.bri.mean_value;
-    //         result = value;
-    //     }
-    // };
+    Register<bit<32>, bit<1>>(1) eg_temp_3;
+    RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_3) egress_test_3_ra={
+        void apply(inout bit<32> value, out bit<32> result) {
+            value = (bit<32>)eg_md.bri.mean_value;
+            result = value;
+        }
+    };
 
-    // Register<bit<32>, bit<1>>(1) eg_temp_4;
-    // RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_4) egress_test_4_ra={
-    //     void apply(inout bit<32> value, out bit<32> result) {
-    //         value = (bit<32>)std;
-    //         result = value;
-    //     }
-    // };
+    Register<bit<32>, bit<1>>(1) eg_temp_4;
+    RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_4) egress_test_4_ra={
+        void apply(inout bit<32> value, out bit<32> result) {
+            value = (bit<32>)std;
+            result = value;
+        }
+    };
 
-    // Register<bit<32>, bit<1>>(1) eg_temp_5;
-    // RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_5) egress_test_5_ra={
-    //     void apply(inout bit<32> value, out bit<32> result) {
-    //         value = (bit<32>)eg_md.bri.sq_mean_value;
-    //         result = value;
-    //     }
-    // };
+    Register<bit<32>, bit<1>>(1) eg_temp_5;
+    RegisterAction<bit<32>, bit<1>, bit<32>> (eg_temp_5) egress_test_5_ra={
+        void apply(inout bit<32> value, out bit<32> result) {
+            value = (bit<32>)detection_result;
+            result = value;
+        }
+    };
 
     // MathUnit
     // Register<bucket_t, bit<1>>(1) mathunit_reg;
@@ -1524,21 +1662,21 @@ control SwitchEgress(
         egress_test_1_ra.execute(0);
     }
 
-    // action egress_test_2(){
-    //     egress_test_2_ra.execute(0);
-    // }
+    action egress_test_2(){
+        egress_test_2_ra.execute(0);
+    }
 
-    // action egress_test_3(){
-    //     egress_test_3_ra.execute(0);
-    // }
+    action egress_test_3(){
+        egress_test_3_ra.execute(0);
+    }
 
-    // action egress_test_4(){
-    //     egress_test_4_ra.execute(0);
-    // }
+    action egress_test_4(){
+        egress_test_4_ra.execute(0);
+    }
 
-    // action egress_test_5(){
-    //     egress_test_5_ra.execute(0);
-    // }
+    action egress_test_5(){
+        egress_test_5_ra.execute(0);
+    }
 
 
     action return_mean_value_sq(bucket_t val){
@@ -1546,7 +1684,7 @@ control SwitchEgress(
     }
 
     action get_std(){
-        std = eg_md.bri.sq_mean_value - mean_value_sq;
+        std = eg_md.bri.sq_mean_value |-| mean_value_sq;
     }
 
     action layer1(){
@@ -1969,7 +2107,7 @@ control SwitchEgress(
     }
     
     action get_result_a(bit<16> input){
-        result = input;
+        detection_result = input;
     }
     
     table get_result{
@@ -1988,29 +2126,40 @@ control SwitchEgress(
         }
         const size = 256;
         const entries={
-            (_, _, _, _, _, 0, _) : get_result_a(0);
-            (0, _, _, _, _, 0, _) : get_result_a(6);
-            (1, _, _, _, 0, 0, 0) : get_result_a(6);
-            (1, _, _, _, 1, 0, 0) : get_result_a(6);
-            (0, _, _, _, _, 0, 1) : get_result_a(6);
-            (2, _, _, _, _, 0, 1) : get_result_a(6);
-            (_, 0, 0, 0, _, 2, _) : get_result_a(2);
-            (_, 1, 0, 0, _, 2, _) : get_result_a(6);
-            (_, _, 2, 0, _, 2, _) : get_result_a(5);
-            (_, 0, 0, 1, _, 2, _) : get_result_a(6);
-            (_, 0, 1, 1, _, 2, _) : get_result_a(6);
-            (_, 2, _, 1, _, 0, _) : get_result_a(0);
-            (_, 2, _, 1, _, 3, _) : get_result_a(1);
+            (1, _, _, _, _, 0, _) : get_result_a(5); //一级超速项, A
+            (2, _, _, _, _, 0, _) : get_result_a(6); //二级超速项, A
+            (1, _, _, _, _, 1, _) : get_result_a(9); //一级超速项, B
+            (2, _, _, _, _, 1, _) : get_result_a(10); //二级超速项, B
+            (1, _, _, _, _, _, _) : get_result_a(1); //一级超速项
+            (2, _, _, _, _, _, _) : get_result_a(2); //二级超速项
+            (_, _, _, _, _, 0, _) : get_result_a(4); //异常检测A
+            (_, _, _, _, _, 1, _) : get_result_a(8); //异常检测B
+            (_, _, _, _, _, _, _) : get_result_a(0); //正常
+
+
+            // (_, _, _, _, _, 0, _) : get_result_a(0);
+            // (0, _, _, _, _, 0, _) : get_result_a(6);
+            // (1, _, _, _, 0, 0, 0) : get_result_a(6);
+            // (1, _, _, _, 1, 0, 0) : get_result_a(6);
+            // (0, _, _, _, _, 0, 1) : get_result_a(6);
+            // (2, _, _, _, _, 0, 1) : get_result_a(6);
+            // (_, 0, 0, 0, _, 2, _) : get_result_a(2);
+            // (_, 1, 0, 0, _, 2, _) : get_result_a(6);
+            // (_, _, 2, 0, _, 2, _) : get_result_a(5);
+            // (_, 0, 0, 1, _, 2, _) : get_result_a(6);
+            // (_, 0, 1, 1, _, 2, _) : get_result_a(6);
+            // (_, 2, _, 1, _, 0, _) : get_result_a(0);
+            // (_, 2, _, 1, _, 3, _) : get_result_a(1);
         }
     }
 
     bit<1> temp;
-    bit<1> temp_std;
 
 
 
 
     apply{
+        
         
         layer1();
         layer2();
@@ -2035,12 +2184,11 @@ control SwitchEgress(
 
         get_result.apply();
 
-
         egress_test_1();
-        // egress_test_2();
-        // egress_test_3();
-        // egress_test_4();
-        // egress_test_5();
+        egress_test_2();
+        egress_test_3();
+        egress_test_4();
+        egress_test_5();
         
 
 
@@ -2059,14 +2207,30 @@ control SwitchEgress(
 //     Egress Deparser
 // --------------------------------------------------------------
 
+// control SwitchEgressDeparser(
+//         packet_out pkt,
+//         inout header_t hdr,
+//         in metadata_t eg_md,
+//         in egress_intrinsic_metadata_for_deparser_t eg_dprsr_md) {
+
+//     apply {
+
+//         pkt.emit(hdr);
+//     }
+// }
+
 control SwitchEgressDeparser(
         packet_out pkt,
         inout header_t hdr,
         in metadata_t eg_md,
-        in egress_intrinsic_metadata_for_deparser_t eg_dprsr_md){
+        in egress_intrinsic_metadata_for_deparser_t eg_dprsr_md) {
 
-    apply{
-        pkt.emit(hdr);
+    apply {
+        pkt.emit(hdr.ethernet);
+        pkt.emit(hdr.arp);      
+        pkt.emit(hdr.ipv4);     
+        pkt.emit(hdr.tcp);      
+        pkt.emit(hdr.udp);      
     }
 }
 

@@ -132,9 +132,18 @@ header gre_h {
     bit<16> proto;
 }
 
+// header arp_h {
+//     bit<16> hw_type;
+//     bit<16> proto_type;
+//     bit<8>  hw_addr_len;
+//     bit<8>  proto_addr_len;
+//     bit<16> opcode;
+// }
+
 struct header_t {
     ethernet_h ethernet;
     vlan_tag_h vlan_tag;
+    arp_h arp;
     ipv4_h ipv4;
     ipv6_h ipv6;
     tcp_h tcp;
